@@ -33,6 +33,7 @@ import { ZoomSelector } from "@/components/ZoomSelector";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { DefaultChatModeSelector } from "@/components/DefaultChatModeSelector";
 import { ContextCompactionSwitch } from "@/components/ContextCompactionSwitch";
+import { AcpAgentSettings } from "@/components/AcpAgentSettings";
 import { useSetAtom } from "jotai";
 import { activeSettingsSectionAtom } from "@/atoms/viewAtoms";
 import { SECTION_IDS, SETTING_IDS } from "@/lib/settingsSearchIndex";
@@ -153,6 +154,17 @@ export default function SettingsPage() {
               Agent Permissions (Pro)
             </h2>
             <AgentToolsSettings />
+          </div>
+
+          {/* ACP Agent Settings */}
+          <div
+            id={SECTION_IDS.acpAgent}
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6"
+          >
+            <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
+              ACP Agent
+            </h2>
+            <AcpAgentSettings />
           </div>
 
           {/* Tools (MCP) */}

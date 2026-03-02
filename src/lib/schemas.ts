@@ -152,13 +152,20 @@ export const StoredChatModeSchema = z.enum([
   "agent", // DEPRECATED: converted to "build" on read
   "local-agent",
   "plan",
+  "acp-agent",
 ]);
 export type StoredChatMode = z.infer<typeof StoredChatModeSchema>;
 
 /**
  * Active chat modes (excludes deprecated values)
  */
-export const ChatModeSchema = z.enum(["build", "ask", "local-agent", "plan"]);
+export const ChatModeSchema = z.enum([
+  "build",
+  "ask",
+  "local-agent",
+  "plan",
+  "acp-agent",
+]);
 export type ChatMode = z.infer<typeof ChatModeSchema>;
 
 export const GitHubSecretsSchema = z.object({
@@ -350,6 +357,14 @@ const BaseUserSettingsFields = {
     .optional(),
   hideLocalAgentNewChatToast: z.boolean().optional(),
   enableContextCompaction: z.boolean().optional(),
+
+  ////////////////////////////////
+  // ACP AGENT SETTINGS.
+  ////////////////////////////////
+  /** Which external ACP-compatible agent to use (e.g. "claude-code", "opencode", "codex") */
+  acpAgentType: z.string().optional(),
+  /** Override the executable path for the ACP agent binary */
+  acpAgentExecutablePath: z.string().optional().nullable(),
 };
 
 /**

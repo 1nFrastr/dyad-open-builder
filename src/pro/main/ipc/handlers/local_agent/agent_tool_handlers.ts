@@ -17,6 +17,7 @@ import type {
   SetAgentToolConsentParams,
   AgentToolConsentResponseParams,
 } from "@/ipc/types";
+import { acpConsentResponders } from "@/acp/acp_agent_handler";
 
 const logger = log.scope("agent_tool_handlers");
 const handle = createLoggedHandler(logger);
@@ -45,6 +46,13 @@ export function registerAgentToolHandlers() {
   handle(
     "agent-tool:consent-response",
     async (_event, params: AgentToolConsentResponseParams) => {
+      // Route to ACP consent responder if one is waiting for this requestId
+      const acpResponder = acpConsentResponders.get(params.requestId);
+      if (acpResponder) {
+        acpResponder(params.decision);
+        return;
+      }
+      // Otherwise route to the built-in local agent consent flow
       resolveAgentToolConsent(params.requestId, params.decision);
     },
   );

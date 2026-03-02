@@ -63,6 +63,7 @@ import { mcpServers } from "../../db/schema";
 import { requireMcpToolConsent } from "../utils/mcp_consent";
 
 import { handleLocalAgentStream } from "../../pro/main/ipc/handlers/local_agent/local_agent_handler";
+import { handleAcpAgentStream } from "../../acp/acp_agent_handler";
 
 import { safeSend } from "../utils/safe_sender";
 import { cleanFullResponse } from "../utils/cleanFullResponse";
@@ -683,10 +684,16 @@ ${componentSnippet}
           `Theme for app ${updatedChat.app.id}: ${updatedChat.app.themeId ?? "none"}, prompt length: ${themePrompt.length} chars`,
         );
 
-        // Migration on read converts "agent" to "build", so no need to check for it here
+        // Migration on read converts "agent" to "build", so no need to check for it here.
+        // acp-agent mode uses an external runtime so "build" is a safe fallback for
+        // system prompt construction (not actually sent to the LLM in acp-agent mode).
+        const chatModeForPrompt =
+          settings.selectedChatMode === "acp-agent"
+            ? "build"
+            : settings.selectedChatMode;
         let systemPrompt = constructSystemPrompt({
           aiRules,
-          chatMode: settings.selectedChatMode,
+          chatMode: chatModeForPrompt,
           enableTurboEditsV2: isTurboEditsV2Enabled(settings),
           themePrompt,
           basicAgentMode: isBasicAgentMode(settings),
@@ -1197,6 +1204,20 @@ This conversation includes one or more image attachments. When the user uploads 
             }
           }
 
+          return;
+        }
+
+        // Handle acp-agent mode: delegate to external ACP-compatible agent
+        if (settings.selectedChatMode === "acp-agent") {
+          await handleAcpAgentStream(
+            event,
+            req,
+            abortController,
+            {
+              placeholderMessageId: placeholderAssistantMessage.id,
+            },
+            settings,
+          );
           return;
         }
 

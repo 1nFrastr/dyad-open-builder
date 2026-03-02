@@ -45,6 +45,8 @@ export function DefaultChatModeSelector() {
         return "Ask";
       case "plan":
         return "Plan";
+      case "acp-agent":
+        return "ACP Agent";
       default:
         throw new Error(`Unknown chat mode: ${mode}`);
     }

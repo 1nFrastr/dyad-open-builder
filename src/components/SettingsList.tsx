@@ -21,6 +21,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: SECTION_IDS.telemetry, label: "Telemetry" },
   { id: SECTION_IDS.integrations, label: "Integrations" },
   { id: SECTION_IDS.agentPermissions, label: "Agent Permissions" },
+  { id: SECTION_IDS.acpAgent, label: "ACP Agent" },
   { id: SECTION_IDS.toolsMcp, label: "Tools (MCP)" },
   { id: SECTION_IDS.experiments, label: "Experiments" },
   { id: SECTION_IDS.dangerZone, label: "Danger Zone" },

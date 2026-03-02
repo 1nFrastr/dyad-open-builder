@@ -69,7 +69,8 @@ export function registerTokenCountHandlers() {
       let systemPrompt = constructSystemPrompt({
         aiRules: await readAiRules(getDyadAppPath(chat.app.path)),
         chatMode:
-          settings.selectedChatMode === "local-agent"
+          settings.selectedChatMode === "local-agent" ||
+          settings.selectedChatMode === "acp-agent"
             ? "build"
             : settings.selectedChatMode,
         enableTurboEditsV2: isTurboEditsV2Enabled(settings),

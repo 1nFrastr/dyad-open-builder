@@ -6,6 +6,7 @@ export const SECTION_IDS = {
   telemetry: "telemetry",
   integrations: "integrations",
   agentPermissions: "agent-permissions",
+  acpAgent: "acp-agent-settings",
   toolsMcp: "tools-mcp",
   experiments: "experiments",
   dangerZone: "danger-zone",
@@ -33,6 +34,8 @@ export const SETTING_IDS = {
   neon: "setting-neon",
   nativeGit: "setting-native-git",
   enableMcpServersForBuildMode: "setting-enable-mcp-servers-for-build-mode",
+  acpAgentType: "setting-acp-agent-type",
+  acpAgentExecutablePath: "setting-acp-agent-executable-path",
   reset: "setting-reset",
 } as const;
 
@@ -276,6 +279,50 @@ export const SETTINGS_SEARCH_INDEX: SearchableSettingItem[] = [
     ],
     sectionId: SECTION_IDS.agentPermissions,
     sectionLabel: "Agent Permissions",
+  },
+
+  // ACP Agent
+  {
+    id: SECTION_IDS.acpAgent,
+    label: "ACP Agent",
+    description:
+      "Configure external ACP-compatible agent runtimes (Claude Code, OpenCode, Codex, etc.)",
+    keywords: [
+      "acp",
+      "agent client protocol",
+      "claude code",
+      "opencode",
+      "codex",
+      "external agent",
+      "runtime",
+    ],
+    sectionId: SECTION_IDS.acpAgent,
+    sectionLabel: "ACP Agent",
+  },
+  {
+    id: SETTING_IDS.acpAgentType,
+    label: "ACP Agent Type",
+    description:
+      "Choose which external ACP-compatible agent runtime to use (e.g. Claude Code, OpenCode, Codex)",
+    keywords: [
+      "acp",
+      "agent",
+      "claude code",
+      "opencode",
+      "codex",
+      "external",
+      "runtime",
+    ],
+    sectionId: SECTION_IDS.acpAgent,
+    sectionLabel: "ACP Agent",
+  },
+  {
+    id: SETTING_IDS.acpAgentExecutablePath,
+    label: "ACP Agent Executable Path",
+    description: "Override the path to the ACP agent binary",
+    keywords: ["acp", "agent", "executable", "path", "binary"],
+    sectionId: SECTION_IDS.acpAgent,
+    sectionLabel: "ACP Agent",
   },
 
   // Tools (MCP)

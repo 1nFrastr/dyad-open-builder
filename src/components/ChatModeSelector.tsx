@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import { LocalAgentNewChatToast } from "./LocalAgentNewChatToast";
 import { useAtomValue } from "jotai";
 import { chatMessagesByIdAtom } from "@/atoms/chatAtoms";
-import { Hammer, Bot, MessageCircle, Lightbulb } from "lucide-react";
+import { Hammer, Bot, MessageCircle, Lightbulb, Cpu } from "lucide-react";
 
 function NewBadge() {
   return (
@@ -90,6 +90,8 @@ export function ChatModeSelector() {
         return isProEnabled ? "Agent" : "Basic Agent";
       case "plan":
         return "Plan";
+      case "acp-agent":
+        return "ACP Agent";
       default:
         return "Build";
     }
@@ -105,6 +107,8 @@ export function ChatModeSelector() {
         return <Bot size={14} />;
       case "plan":
         return <Lightbulb size={14} />;
+      case "acp-agent":
+        return <Cpu size={14} />;
       default:
         return <Hammer size={14} />;
     }
@@ -130,7 +134,9 @@ export function ChatModeSelector() {
                       ? "bg-purple-500/10 text-purple-600 hover:bg-purple-500/15 dark:bg-purple-500/15 dark:text-purple-400 dark:hover:bg-purple-500/20"
                       : selectedMode === "plan"
                         ? "bg-blue-500/10 text-blue-600 hover:bg-blue-500/15 dark:bg-blue-500/15 dark:text-blue-400 dark:hover:bg-blue-500/20"
-                        : "text-foreground/80 hover:text-foreground hover:bg-muted/60",
+                        : selectedMode === "acp-agent"
+                          ? "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15 dark:bg-emerald-500/15 dark:text-emerald-400 dark:hover:bg-emerald-500/20"
+                          : "text-foreground/80 hover:text-foreground hover:bg-muted/60",
                 )}
                 size="sm"
               />
@@ -212,6 +218,17 @@ export function ChatModeSelector() {
               </div>
               <span className="text-xs text-muted-foreground ml-[22px]">
                 Ask questions about the app
+              </span>
+            </div>
+          </SelectItem>
+          <SelectItem value="acp-agent">
+            <div className="flex flex-col items-start">
+              <div className="flex items-center gap-1.5">
+                <Cpu size={14} className="text-emerald-500" />
+                <span className="font-medium">ACP Agent</span>
+              </div>
+              <span className="text-xs text-muted-foreground ml-[22px]">
+                External agent via Agent Client Protocol
               </span>
             </div>
           </SelectItem>
