@@ -103,14 +103,82 @@ describe("AcpSessionTranslator", () => {
   });
 
   describe("agent_thought_chunk", () => {
-    it("wraps text in <think> tag", () => {
+    it("opens <think> on first chunk but does not close until a non-thought event", () => {
       const chunk = t.translateUpdate({
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking..." },
       } as any);
       expect(chunk).toContain("<think>");
       expect(chunk).toContain("Thinking...");
-      expect(chunk).toContain("</think>");
+      // Block stays open until the next non-thought event or finalize()
+      expect(chunk).not.toContain("</think>");
+      expect(t.getAccumulatedContent()).not.toContain("</think>");
+    });
+
+    it("merges multiple thought chunks into a single <think> block", () => {
+      t.translateUpdate({
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Part 1. " },
+      } as any);
+      t.translateUpdate({
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Part 2." },
+      } as any);
+      const full = t.getAccumulatedContent();
+      // Exactly one opening tag — chunks are merged into one block
+      expect((full.match(/<think>/g) ?? []).length).toBe(1);
+      expect(full).toContain("Part 1. ");
+      expect(full).toContain("Part 2.");
+      expect(full).not.toContain("</think>");
+    });
+
+    it("closes the think block when a message chunk arrives", () => {
+      t.translateUpdate({
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Thinking..." },
+      } as any);
+      t.translateUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Here's the answer." },
+      } as any);
+      const full = t.getAccumulatedContent();
+      expect(full).toContain("<think>");
+      expect(full).toContain("</think>");
+      expect(full).toContain("Here's the answer.");
+      // </think> must come before the message text
+      expect(full.indexOf("</think>")).toBeLessThan(full.indexOf("Here's the answer."));
+    });
+
+    it("closes the think block when a tool call arrives", () => {
+      t.translateUpdate({
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Planning..." },
+      } as any);
+      t.translateNotification(
+        toolCall("r1", "read", { locations: [{ path: "src/foo.ts" }] }),
+      );
+      const full = t.getAccumulatedContent();
+      expect(full).toContain("</think>");
+      expect(full.indexOf("</think>")).toBeLessThan(full.indexOf("<dyad-read"));
+    });
+
+    it("finalize() closes a pending think block", () => {
+      t.translateUpdate({
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Still thinking..." },
+      } as any);
+      expect(t.getAccumulatedContent()).not.toContain("</think>");
+      const frag = t.finalize();
+      expect(frag).toContain("</think>");
+      expect(t.getAccumulatedContent()).toContain("</think>");
+    });
+
+    it("finalize() returns empty string when no think block is open", () => {
+      t.translateUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Hello" },
+      } as any);
+      expect(t.finalize()).toBe("");
     });
 
     it("XML-escapes content inside <think>", () => {
@@ -258,6 +326,61 @@ describe("AcpSessionTranslator", () => {
       const writeTags = getDyadWriteTags(t.getAccumulatedContent());
       expect(writeTags).toHaveLength(1);
       expect(writeTags[0].path).toBe("src/new.ts");
+    });
+
+    it("emits <dyad-write> when oldText is empty string (OpenCode new-file convention)", () => {
+      t.translateNotification(toolCall("e1", "edit", { title: "Create file" }));
+      t.translateNotification(
+        toolCallUpdate("e1", {
+          content: [{ type: "diff", path: "src/new.ts", oldText: "", newText: "export const x = 1;" }],
+          status: "completed",
+        }),
+      );
+      const writeTags = getDyadWriteTags(t.getAccumulatedContent());
+      const srTags = getDyadSearchReplaceTags(t.getAccumulatedContent());
+      expect(writeTags).toHaveLength(1);
+      expect(writeTags[0].path).toBe("src/new.ts");
+      expect(srTags).toHaveLength(0);
+    });
+
+    it("ignores follow-up text content after a diff (OpenCode sends 'Wrote file successfully.')", () => {
+      t.translateNotification(toolCall("e1", "edit", { title: "Summary: write" }));
+      // First update: the actual diff
+      t.translateNotification(
+        toolCallUpdate("e1", {
+          content: [{ type: "diff", path: "src/pages/Index.tsx", oldText: "", newText: "export default function Index() {}" }],
+        }),
+      );
+      // Second update: agent confirmation message + completed status
+      t.translateNotification(
+        toolCallUpdate("e1", {
+          content: [textItem("Wrote file successfully.")],
+          status: "completed",
+        }),
+      );
+      const full = t.getAccumulatedContent();
+      const writeTags = getDyadWriteTags(full);
+      // Must have exactly ONE write card, not two
+      expect(writeTags).toHaveLength(1);
+      expect(writeTags[0].path).toBe("src/pages/Index.tsx");
+      // Confirmation text must not appear as file content
+      expect(writeTags[0].content).not.toContain("Wrote file successfully.");
+    });
+
+    it("discards buffered text content when edit tool call has no file path (OpenCode Summary:edit tool call)", () => {
+      // OpenCode sends a SECOND, separate edit tool call (different toolCallId) with
+      // no locations and text content = "Edit applied successfully. LSP errors..."
+      // This must NOT produce a dyad-write card.
+      t.translateNotification(toolCall("summary1", "edit", { title: "Summary: edit" }));
+      t.translateNotification(
+        toolCallUpdate("summary1", {
+          content: [textItem("Edit applied successfully.\n\nLSP errors detected...")],
+          status: "completed",
+        }),
+      );
+      const full = t.getAccumulatedContent();
+      const writeTags = getDyadWriteTags(full);
+      expect(writeTags).toHaveLength(0);
     });
 
     it("still emits <dyad-search-replace> when oldText is present (patch)", () => {

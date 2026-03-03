@@ -293,6 +293,12 @@ export async function handleAcpAgentStream(
     abortController.signal.removeEventListener("abort", onAbort);
   }
 
+  // Close any open streaming state (e.g. <think> block from opencode thought chunks).
+  const finalContent = translator.finalize();
+  if (finalContent) {
+    await flushToFrontend(finalContent);
+  }
+
   // Final DB write
   await db
     .update(messages)

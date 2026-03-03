@@ -54,6 +54,12 @@ interface ToolCallState {
   needsClose: boolean;
   /** Accumulated full-file content for edit kind (emitted as <dyad-write> at terminal status) */
   editContentBuffer?: string;
+  /**
+   * Set to true once a diff item has been processed for this edit tool call.
+   * Subsequent text content items (e.g. "Wrote file successfully.") should be
+   * ignored so they don't create a spurious second <dyad-write> card.
+   */
+  hasDiff?: boolean;
 }
 
 // =============================================================================
@@ -69,6 +75,8 @@ interface ToolCallState {
 export class AcpSessionTranslator {
   private accumulatedContent = "";
   private toolCallStates = new Map<string, ToolCallState>();
+  /** Whether we are currently inside a streaming <think> block from agent_thought_chunk events */
+  private inThinkBlock = false;
 
   /**
    * @param workspaceRoot  The app's absolute directory. Absolute paths from the
@@ -129,13 +137,38 @@ export class AcpSessionTranslator {
     return content;
   }
 
+  /**
+   * Close the streaming think block if one is open.
+   *
+   * Directly updates accumulatedContent and returns the closing fragment so
+   * callers can prepend it to their own fragment without double-appending via
+   * append().
+   */
+  private flushThinkBlock(): string {
+    if (!this.inThinkBlock) return "";
+    this.inThinkBlock = false;
+    const close = "</think>\n";
+    this.accumulatedContent += close;
+    return close;
+  }
+
+  /**
+   * Finalizes any open streaming state (e.g. closes a pending <think> block).
+   * Call this after the agent prompt completes to ensure the output is well-formed.
+   * Returns any content that was appended.
+   */
+  public finalize(): string {
+    return this.flushThinkBlock();
+  }
+
   // =============================================================================
   // agent_message_chunk → plain text
   // =============================================================================
 
   private translateMessageChunk(update: ContentChunk & { sessionUpdate: "agent_message_chunk" }): string {
     if (update.content.type !== "text") return "";
-    return this.append(stripAgentInternalTags(update.content.text));
+    const prefix = this.flushThinkBlock();
+    return prefix + this.append(stripAgentInternalTags(update.content.text));
   }
 
   // =============================================================================
@@ -144,8 +177,14 @@ export class AcpSessionTranslator {
 
   private translateThoughtChunk(update: ContentChunk & { sessionUpdate: "agent_thought_chunk" }): string {
     if (update.content.type !== "text") return "";
-    const xml = `\n<think>${escapeXmlContent(update.content.text)}</think>\n`;
-    return this.append(xml);
+    // Open the block on the first chunk; subsequent chunks stream text inside.
+    // The block is closed by flushThinkBlock() when a non-thought event arrives
+    // or when finalize() is called at the end of the prompt.
+    if (!this.inThinkBlock) {
+      this.inThinkBlock = true;
+      return this.append(`\n<think>${escapeXmlContent(update.content.text)}`);
+    }
+    return this.append(escapeXmlContent(update.content.text));
   }
 
   // =============================================================================
@@ -163,6 +202,9 @@ export class AcpSessionTranslator {
       needsClose: false,
     };
     this.toolCallStates.set(update.toolCallId, state);
+
+    // Close any open streaming think block before starting a tool call.
+    const prefix = this.flushThinkBlock();
 
     let xml = this.buildOpeningXml(update, state);
 
@@ -182,8 +224,8 @@ export class AcpSessionTranslator {
       xml += this.buildClosingXml(state);
     }
 
-    if (!xml) return "";
-    return this.append(xml);
+    if (!xml) return prefix;
+    return prefix + this.append(xml);
   }
 
   // =============================================================================
@@ -324,8 +366,10 @@ export class AcpSessionTranslator {
    */
   private buildClosingXml(state: ToolCallState): string {
     // "edit" with buffered full-file text → emit <dyad-write>
-    if (state.kind === "edit" && state.editContentBuffer) {
-      const relPath = this.relativize(state.filePath ?? "");
+    // Require a file path: an edit without locations is OpenCode's summary/status
+    // message ("Edit applied successfully.", LSP diagnostics), not actual file content.
+    if (state.kind === "edit" && state.editContentBuffer && state.filePath) {
+      const relPath = this.relativize(state.filePath);
       const desc = escapeXmlAttr(state.title ?? "");
       return [
         `\n<dyad-write path="${escapeXmlAttr(relPath)}" description="${desc}">`,
@@ -360,9 +404,11 @@ export class AcpSessionTranslator {
   private processContentItem(item: ToolCallContent, state: ToolCallState): string {
     if (item.type === "diff") {
       const diff = item as Diff & { type: "diff" };
+      state.hasDiff = true;
       // ACP protocol: oldText == null means this is a new file (not a patch).
+      // Some agents (e.g. OpenCode) use "" instead of null for the same case.
       // Emit <dyad-write> so the UI shows a write card instead of an empty search side.
-      if (diff.oldText == null) {
+      if (diff.oldText == null || diff.oldText === "") {
         return this.diffToWriteXml(diff, state.title);
       }
       return this.diffToSearchReplaceXml(diff);
@@ -370,6 +416,9 @@ export class AcpSessionTranslator {
     if (item.type === "content" && item.content.type === "text") {
       const text = item.content.text;
       if (state.kind === "edit") {
+        // If a diff was already processed (e.g. OpenCode sends "Wrote file successfully."
+        // as a follow-up text item), discard the text — the write card was already emitted.
+        if (state.hasDiff) return "";
         // Buffer full-file content; emitted as <dyad-write> when the tool call closes
         state.editContentBuffer = (state.editContentBuffer ?? "") + text;
         return "";

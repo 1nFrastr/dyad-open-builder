@@ -62,4 +62,5 @@ export const ACP_AGENT_EXECUTABLES: Record<AcpAgentType, string> = {
 export const ACP_AGENT_DEFAULT_ARGS: Partial<Record<AcpAgentType, string[]>> =
   {
     copilot: ["copilot", "acp"],
+    opencode: ["acp"],
   };
