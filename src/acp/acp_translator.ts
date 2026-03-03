@@ -10,6 +10,17 @@
 
 import path from "node:path";
 import { escapeXmlAttr, escapeXmlContent } from "../../shared/xmlEscape";
+import { escapeSearchReplaceMarkers } from "../pro/shared/search_replace_markers";
+
+/**
+ * Remove agent-internal XML tags that should never surface to the user.
+ * Claude Code injects <system-reminder>...</system-reminder> blocks into its
+ * responses (e.g. inside read results) as internal safety notes. They are
+ * not meaningful to the user and would otherwise appear as raw text.
+ */
+function stripAgentInternalTags(text: string): string {
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, "");
+}
 import type {
   SessionNotification,
   SessionUpdate,
@@ -34,11 +45,15 @@ interface ToolCallState {
   toolCallId: string;
   kind?: string;
   title?: string;
+  /** Primary file path from locations[0], used for buffered <dyad-write> on close */
+  filePath?: string;
   status: ToolCallStatus;
   /** Whether the XML tag has been closed */
   closed: boolean;
   /** Whether this tool call emitted a write-style open tag (needs explicit close) */
   needsClose: boolean;
+  /** Accumulated full-file content for edit kind (emitted as <dyad-write> at terminal status) */
+  editContentBuffer?: string;
 }
 
 // =============================================================================
@@ -120,7 +135,7 @@ export class AcpSessionTranslator {
 
   private translateMessageChunk(update: ContentChunk & { sessionUpdate: "agent_message_chunk" }): string {
     if (update.content.type !== "text") return "";
-    return this.append(update.content.text);
+    return this.append(stripAgentInternalTags(update.content.text));
   }
 
   // =============================================================================
@@ -142,6 +157,7 @@ export class AcpSessionTranslator {
       toolCallId: update.toolCallId,
       kind: update.kind,
       title: update.title,
+      filePath: update.locations?.[0]?.path,
       status: update.status ?? "pending",
       closed: false,
       needsClose: false,
@@ -153,7 +169,7 @@ export class AcpSessionTranslator {
     // If content already comes with the initial tool_call (e.g. diffs)
     if (update.content?.length) {
       for (const item of update.content) {
-        xml += this.contentItemToXml(item);
+        xml += this.processContentItem(item, state);
       }
     }
 
@@ -163,7 +179,7 @@ export class AcpSessionTranslator {
       update.status === "failed"
     ) {
       state.closed = true;
-      if (state.needsClose) xml += this.buildClosingTag(state);
+      xml += this.buildClosingXml(state);
     }
 
     if (!xml) return "";
@@ -187,7 +203,7 @@ export class AcpSessionTranslator {
 
     if (update.content?.length) {
       for (const item of update.content) {
-        xml += this.contentItemToXml(item);
+        xml += this.processContentItem(item, state);
       }
     }
 
@@ -196,7 +212,7 @@ export class AcpSessionTranslator {
 
     if (isTerminal && !state.closed) {
       state.closed = true;
-      if (state.needsClose) xml += this.buildClosingTag(state);
+      xml += this.buildClosingXml(state);
     }
 
     if (!xml) return "";
@@ -221,7 +237,8 @@ export class AcpSessionTranslator {
     ].filter(Boolean);
 
     if (!parts.length) return "";
-    const xml = `\n<dyad-status type="info">${escapeXmlContent(parts.join(", "))}</dyad-status>\n`;
+    // dyad-status uses the `title` attribute, not inner content text
+    const xml = `\n<dyad-status title="${escapeXmlAttr(parts.join(", "))}"></dyad-status>\n`;
     return this.append(xml);
   }
 
@@ -245,11 +262,11 @@ export class AcpSessionTranslator {
       }
 
       case "edit": {
-        // Diffs come in tool_call content or tool_call_update content
-        // If no path yet, wait for the update
-        if (!filePath) return "";
-        state.needsClose = true;
-        return `\n<dyad-write path="${escapeXmlAttr(this.relativize(filePath))}" description="${escapeXmlAttr(title)}">`;
+        // ACP edit diffs are emitted as standalone <dyad-search-replace> tags by
+        // processContentItem, so we don't open a wrapper tag here.
+        // Full-file content (non-diff) is buffered and emitted as <dyad-write> at close.
+        state.needsClose = false;
+        return "";
       }
 
       case "delete": {
@@ -280,46 +297,128 @@ export class AcpSessionTranslator {
         return `\n<dyad-web-crawl url="${escapeXmlAttr(title)}">`;
       }
 
-      case "execute":
-      default: {
+      case "execute": {
+        // Keep execute output inside the status card so users can expand it.
         if (title) {
-          return `\n<dyad-status type="info">${escapeXmlContent(title)}</dyad-status>`;
+          state.needsClose = true;
+          return `\n<dyad-status title="${escapeXmlAttr(title)}">`;
+        }
+        return "";
+      }
+
+      default: {
+        // Unknown kinds emit a self-closing status chip (no expandable content).
+        if (title) {
+          return `\n<dyad-status title="${escapeXmlAttr(title)}"></dyad-status>`;
         }
         return "";
       }
     }
   }
 
-  private buildClosingTag(state: ToolCallState): string {
+  /**
+   * Emit the correct closing XML for a tool call.
+   *
+   * For "edit" kind with buffered full-file content, emits a complete <dyad-write>.
+   * For all other kinds with needsClose=true, emits the matching closing tag.
+   */
+  private buildClosingXml(state: ToolCallState): string {
+    // "edit" with buffered full-file text → emit <dyad-write>
+    if (state.kind === "edit" && state.editContentBuffer) {
+      const relPath = this.relativize(state.filePath ?? "");
+      const desc = escapeXmlAttr(state.title ?? "");
+      return [
+        `\n<dyad-write path="${escapeXmlAttr(relPath)}" description="${desc}">`,
+        escapeXmlContent(state.editContentBuffer),
+        `</dyad-write>\n`,
+      ].join("\n");
+    }
+
+    if (!state.needsClose) return "";
+
     switch (state.kind ?? "other") {
-      case "read":     return "</dyad-read>\n";
-      case "edit":     return "\n</dyad-write>\n";
-      case "delete":   return "</dyad-delete>\n";
-      case "move":     return "</dyad-rename>\n";
-      case "search":   return "</dyad-grep>\n";
-      case "think":    return "</think>\n";
-      case "fetch":    return "</dyad-web-crawl>\n";
-      default:         return "";
+      case "read":    return "</dyad-read>\n";
+      case "delete":  return "</dyad-delete>\n";
+      case "move":    return "</dyad-rename>\n";
+      case "search":  return "</dyad-grep>\n";
+      case "think":   return "</think>\n";
+      case "fetch":   return "</dyad-web-crawl>\n";
+      case "execute": return "</dyad-status>\n";
+      default:        return "";
     }
   }
 
-  private contentItemToXml(item: ToolCallContent): string {
+  /**
+   * Convert a single tool call content item to its XML fragment.
+   *
+   * For "edit" kind:
+   *  - "diff" items with oldText == null → <dyad-write> (new file creation)
+   *  - "diff" items with oldText present → standalone <dyad-search-replace>
+   *  - "content" items → buffered into state.editContentBuffer for <dyad-write> at close
+   * For all other kinds, text content is emitted inline.
+   */
+  private processContentItem(item: ToolCallContent, state: ToolCallState): string {
     if (item.type === "diff") {
-      return this.diffToSearchReplaceXml(item as Diff & { type: "diff" });
+      const diff = item as Diff & { type: "diff" };
+      // ACP protocol: oldText == null means this is a new file (not a patch).
+      // Emit <dyad-write> so the UI shows a write card instead of an empty search side.
+      if (diff.oldText == null) {
+        return this.diffToWriteXml(diff, state.title);
+      }
+      return this.diffToSearchReplaceXml(diff);
     }
     if (item.type === "content" && item.content.type === "text") {
-      return item.content.text;
+      const text = item.content.text;
+      if (state.kind === "edit") {
+        // Buffer full-file content; emitted as <dyad-write> when the tool call closes
+        state.editContentBuffer = (state.editContentBuffer ?? "") + text;
+        return "";
+      }
+      // read/search content can be very large and causes rendering issues when
+      // placed inside the card (Claude Code often re-emits the same content as
+      // agent_message_chunk anyway). Only show the card header (path / query).
+      if (state.kind === "read" || state.kind === "search") {
+        return "";
+      }
+      // Strip Claude Code internal tags (e.g. <system-reminder>) that may appear
+      // inside execute results but are not meaningful to the user.
+      return stripAgentInternalTags(text);
     }
     return "";
   }
 
+  /**
+   * Convert a new-file ACP diff (oldText == null) into a <dyad-write> tag.
+   * This matches how native Dyad represents file creation.
+   */
+  private diffToWriteXml(diff: Diff & { type: "diff" }, title?: string): string {
+    const relPath = this.relativize(diff.path);
+    const desc = escapeXmlAttr(title ?? "");
+    return [
+      `\n<dyad-write path="${escapeXmlAttr(relPath)}" description="${desc}">`,
+      escapeXmlContent(diff.newText),
+      `</dyad-write>\n`,
+    ].join("\n");
+  }
+
+  /**
+   * Convert an ACP diff into a standalone <dyad-search-replace> tag using the
+   * <<<<<<< SEARCH / ======= / >>>>>>> REPLACE format that DyadSearchReplace expects.
+   */
   private diffToSearchReplaceXml(diff: Diff & { type: "diff" }): string {
-    const oldText = diff.oldText ?? "";
-    const newText = diff.newText ?? "";
+    // Escape any lines that look like SEARCH/REPLACE block markers so that
+    // parseSearchReplaceBlocks does not split on them.  The corresponding
+    // unescapeMarkers() call in search_replace_processor will restore them
+    // before the diff is applied to the file.
+    const oldText = escapeSearchReplaceMarkers(diff.oldText ?? "");
+    const newText = escapeSearchReplaceMarkers(diff.newText ?? "");
     return [
       `\n<dyad-search-replace path="${escapeXmlAttr(this.relativize(diff.path))}">`,
-      `<search>${escapeXmlContent(oldText)}</search>`,
-      `<replace>${escapeXmlContent(newText)}</replace>`,
+      `<<<<<<< SEARCH`,
+      escapeXmlContent(oldText),
+      `=======`,
+      escapeXmlContent(newText),
+      `>>>>>>> REPLACE`,
       `</dyad-search-replace>\n`,
     ].join("\n");
   }
